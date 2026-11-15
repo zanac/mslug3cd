@@ -115,6 +115,7 @@ static struct { int joypad_id, period, duty, offset; } patterns[16];   /* PATTER
 static int pattern_count;
 
 static int current_frame;
+static FILE *zdump_file;   /* ZDUMP=file: the Z80 RAM 0xf800-0xffff after every frame (dev core) */
 static int sendcmd_frame = -1, sendcmd_value, sendcmd_n, sendcmd_frames[16], sendcmd_values[16];   /* SENDCMD=frame:command sends a sound command (dev core only) */
 
 /* WATCH: addresses (hex, comma separated) printed on every frame their bytes change */
@@ -455,6 +456,7 @@ int main(int argc, char **argv)
         }
         sendcmd_frame = sendcmd_frames[0];
     }
+    if (getenv("ZDUMP")) zdump_file = fopen(getenv("ZDUMP"), "wb");
     if (getenv("PRESS")) parse_press(getenv("PRESS"));
     if (getenv("HOLD")) {
         /* HOLD="right,b1": these buttons of player 1 are held from HOLD_FROM on */
@@ -594,6 +596,11 @@ int main(int argc, char **argv)
             if (send) send(sendcmd_values[index] & 0xff);
         }
         run();
+        if (zdump_file) {
+            unsigned (*zread)(unsigned) = dlsym(core, "retro_dev_z80_read");
+            unsigned char block[2048]; unsigned a;
+            if (zread) { for (a = 0; a < 2048; a++) block[a] = zread(0xf800 + a); fwrite(block, 1, 2048, zdump_file); }
+        }
         if (watch_count && read8) {
             /* WATCH: print the watched bytes when they change */
             unsigned values[MAXIMUM_WATCHES];

@@ -71,10 +71,10 @@ index d609f98..6c76f53 100644
  }
  
 diff --git a/src/drivers/neogeo.c b/src/drivers/neogeo.c
-index 640bc85..195117c 100644
+index 640bc85..2902e6d 100644
 --- a/src/drivers/neogeo.c
 +++ b/src/drivers/neogeo.c
-@@ -460,6 +460,20 @@ static READ16_HANDLER( timer16_r )
+@@ -460,6 +460,21 @@ static READ16_HANDLER( timer16_r )
  	return res;
  }
  
@@ -89,13 +89,14 @@ index 640bc85..195117c 100644
 +}
 +
 +__attribute__((visibility("default"))) void retro_dev_halt68k(int halt) { cpu_set_halt_line(0, halt ? ASSERT_LINE : CLEAR_LINE); }
++__attribute__((visibility("default"))) unsigned retro_dev_z80_read(unsigned address) { return cpunum_read_byte(1, address & 0xffff); }
 +static WRITE16_HANDLER( neo_z80_w );
 +__attribute__((visibility("default"))) void retro_dev_sound_command(unsigned command) { neo_z80_w(0, command << 8, 0); }
 +
  static WRITE16_HANDLER( neo_z80_w )
  {
  	/* tpgold uses 16-bit writes, this can't be correct */
-@@ -467,6 +481,7 @@ static WRITE16_HANDLER( neo_z80_w )
+@@ -467,6 +482,7 @@ static WRITE16_HANDLER( neo_z80_w )
  /*		return;*/
  
  	soundlatch_w(0,(data>>8)&0xff);
@@ -103,7 +104,7 @@ index 640bc85..195117c 100644
  	pending_command = 1;
  	cpu_set_irq_line(1, IRQ_LINE_NMI, PULSE_LINE);
  	/* spin for a while to let the Z80 read the command (fixes hanging sound in pspikes2) */
-@@ -8067,10 +8082,60 @@ DRIVER_INIT( kf2k3upl )
+@@ -8067,10 +8083,60 @@ DRIVER_INIT( kf2k3upl )
  
  static UINT32 cpu1_second_bankaddress;
  
