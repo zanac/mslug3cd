@@ -59,3 +59,19 @@ be done in a small number of fixed-region routines. Two options remain open:
 patch the ~270 write sites to go through a lookup table, or renumber the static
 tile references in the data. The first is mechanical and verifiable with the
 frame-by-frame oracle.
+
+## Neo Geo CD boot test bench (work in progress)
+
+With the user's NGCD BIOS (top-loading `top-sp1.bin`, the universe one is `uni-bioscd33`)
+MAME's `neocd` driver runs headless: `mame neocd -rompath <dir> -cdrom disc.chd -bios top
+-video none`, and `-debug -debugscript` with a `trace` command gives a full 68000 trace.
+Findings from the BIOS code (byte-swapped dump, disassembled with m68k objdump):
+
+* the disc check (state 3 of the BIOS state machine at 0xc1dc/0xe8a6) compares the
+  ISO PVD (`CD001`), then reads the files named `CPY.TXT`, `BIB.TXT`, `ABS.TXT` and
+  expects their text to start with `Copyright` / `Bibliographiced` / `Abstracted`,
+  followed by ` by SNK corporation`; the PVD copyright/abstract/bibliographic fields
+  must hold the plain names (`tools/ngcd_mkdisc.py` writes them);
+* with a disc built that way the BIOS still polls the drive status (byte 0x10f7fa
+  stays 0, so the check never starts): the drive is not reported as holding a disc.
+  Not solved yet; a known-good NGCD image is needed to compare the format.
