@@ -97,3 +97,11 @@ frames of 6,001 by hash; the 23 remaining differ only by a banner shown a frame 
 Open: tiles never seen in training render blank (needs coverage from more play-throughs and from
 Mission 2), real cycle cost of the stub on hardware, program relocation (NGCD RAM map still to be
 confirmed from the friend's probe disc).
+
+## PCM: fitting 1 MB
+
+The measured run starts 9,875 ADPCM-A samples (183 distinct ranges, 2.8 MB counting every range).
+Samples are used throughout the mission (no phase needs under 0.9 MB, early phases need 2.1 MB), so
+per-scene reloads would be frequent. A static choice by plays per byte (`tools/ms3_pcm.py`) keeps
+88 samples in 1 MB and still covers 95.5% of all plays; the rest (rare voices, one-off sounds) are
+aliased to a kept sample in the Z80 sample table. ADPCM-B not measured yet.
