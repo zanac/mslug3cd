@@ -505,6 +505,15 @@ int main(int argc, char **argv)
     }
 
     run = (void (*)(void))core_function(core, "retro_run");
+    if (getenv("DUMP_PROGRAM")) {
+        /* DUMP_PROGRAM=file: the decrypted 68000 program region (0x900000 bytes), saved before the first frame */
+        unsigned (*program_byte)(unsigned) = dlsym(core, "retro_dev_program_byte");
+        FILE *program_file = fopen(getenv("DUMP_PROGRAM"), "wb");
+        unsigned offset;
+        if (!program_byte || !program_file) { fprintf(stderr, "DUMP_PROGRAM needs the core of ms3_trace_core.patch\n"); return 1; }
+        for (offset = 0; offset < 0x900000; offset++) fputc(program_byte(offset), program_file);
+        fclose(program_file);
+    }
     /* TRACE=file: records 'T' frame count ids... (tiles drawn in the last TRACE_WINDOW frames), 'A' frame start
        end (an ADPCM-A sample started), 'B' frame pc|bank<<24 (a program bank switch), 'P' frame count pages... (256-byte pages of the program ROM read or run), all little-endian u32 */
     FILE *trace_file = NULL;
@@ -608,6 +617,15 @@ int main(int argc, char **argv)
                 if (program_counter)
                     printf("frame %d: pc %06x\n", current_frame, program_counter());
             }
+    }
+    if (getenv("VRAM_PCS")) {
+        /* VRAM_PCS=file: the 68000 addresses that wrote tile words to the video RAM, with counts */
+        int (*vram_pcs)(unsigned *, int) = dlsym(core, "retro_dev_vram_pcs");
+        FILE *vram_file = fopen(getenv("VRAM_PCS"), "w");
+        static unsigned vram_data[8192];
+        int count = vram_pcs ? vram_pcs(vram_data, 4096) : 0, item;
+        for (item = 0; item < count; item++) fprintf(vram_file, "%06x %u\n", vram_data[2 * item], vram_data[2 * item + 1]);
+        fclose(vram_file);
     }
     if (trace_file) fclose(trace_file);
     if (audio_file) {

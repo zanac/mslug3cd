@@ -44,3 +44,18 @@ at each switch would cost far too much (36 switches a frame).
 3. Sprite RAM: one load of the 2.5-3 MB of Mission 1 tiles; renumber the tiles in the tables.
 4. Sound: music as CD audio tracks recorded from the emulator; the 2.4 MB of samples cut to 1 MB.
 5. ISO and CD loader, test on the emulator and on a real machine.
+
+## Where tile numbers are written (Mission 1 bot run)
+
+Instrumented the video-RAM data port (tile words, VRAM < 0x7000): 271 distinct
+68000 addresses write them, 1.18 M writes in 12,000 frames, **all inside the fixed
+ROM region (< 0x100000)**, none in the banked window. 181 sites cover 99 % of the
+writes; the hottest routines sit at 0xe0b0-0xe0ca, 0x112c2-0x112da, 0x768e,
+0xe364-0xe372 and 0x11576-0x11580.
+
+Consequence: tile renumbering (needed because the 32768-tile DRAM is smaller than
+the 0x62000-tile address space) cannot be done in the banked data alone, but it can
+be done in a small number of fixed-region routines. Two options remain open:
+patch the ~270 write sites to go through a lookup table, or renumber the static
+tile references in the data. The first is mechanical and verifiable with the
+frame-by-frame oracle.
