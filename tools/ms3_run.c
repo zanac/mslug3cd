@@ -115,6 +115,7 @@ static struct { int joypad_id, period, duty, offset; } patterns[16];   /* PATTER
 static int pattern_count;
 
 static int current_frame;
+static int sendcmd_frame = -1, sendcmd_value, sendcmd_n, sendcmd_frames[16], sendcmd_values[16];   /* SENDCMD=frame:command sends a sound command (dev core only) */
 
 /* WATCH: addresses (hex, comma separated) printed on every frame their bytes change */
 #define MAXIMUM_WATCHES 16
@@ -443,6 +444,17 @@ int main(int argc, char **argv)
                 text++;
         }
     }
+    if (getenv("SENDCMD")) {
+        /* "frame:command;frame:command": the first frame also is when the 68000 is halted (HALT68K), 50 frames earlier */
+        const char *text = getenv("SENDCMD");
+        while (*text && sendcmd_n < 16 && sscanf(text, "%d:%i", &sendcmd_frames[sendcmd_n], &sendcmd_values[sendcmd_n]) == 2) {
+            sendcmd_n++;
+            text = strchr(text, ';');
+            if (!text) break;
+            text++;
+        }
+        sendcmd_frame = sendcmd_frames[0];
+    }
     if (getenv("PRESS")) parse_press(getenv("PRESS"));
     if (getenv("HOLD")) {
         /* HOLD="right,b1": these buttons of player 1 are held from HOLD_FROM on */
@@ -553,6 +565,7 @@ int main(int argc, char **argv)
     int trace_window = getenv("TRACE_WINDOW") ? atoi(getenv("TRACE_WINDOW")) : 30;
     int (*tiles_take)(unsigned *, int) = dlsym(core, "retro_dev_tiles_take");
     int (*adpcm_take)(unsigned *, int) = dlsym(core, "retro_dev_adpcm_take");
+    int (*cmd_take)(unsigned *, int) = dlsym(core, "retro_dev_cmd_take");
     int (*banks_take)(unsigned *, int) = dlsym(core, "retro_dev_banks_take");
     int (*touch_take)(unsigned *, int) = dlsym(core, "retro_dev_touch_take");
     static unsigned char window_pages[0x9000];
@@ -572,6 +585,14 @@ int main(int argc, char **argv)
 
         if (write8)
             write_memory(write8);
+        if (sendcmd_frame >= 0 && current_frame == sendcmd_frame - 50 && getenv("HALT68K")) {
+            void (*halt)(int) = dlsym(core, "retro_dev_halt68k");
+            if (halt) halt(1);
+        }
+        for (index = 0; index < sendcmd_n; index++) if (current_frame == sendcmd_frames[index]) {
+            void (*send)(unsigned) = dlsym(core, "retro_dev_sound_command");
+            if (send) send(sendcmd_values[index] & 0xff);
+        }
         run();
         if (watch_count && read8) {
             /* WATCH: print the watched bytes when they change */
@@ -609,6 +630,11 @@ int main(int argc, char **argv)
             for (item = 0; item < count; item++) {
                 head[0] = 'A'; head[1] = current_frame; fwrite(head, 4, 2, trace_file);
                 fwrite(&trace_pairs[2 * item], 4, 2, trace_file);
+            }
+            count = cmd_take ? cmd_take(trace_pairs, 4096) : 0;
+            for (item = 0; item < count; item++) {
+                head[0] = 'C'; head[1] = current_frame; fwrite(head, 4, 2, trace_file);
+                fwrite(&trace_pairs[item], 4, 1, trace_file);
             }
             count = banks_take(trace_pairs, 1024);
             for (item = 0; item < count; item++) {

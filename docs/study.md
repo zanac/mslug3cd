@@ -105,3 +105,18 @@ Samples are used throughout the mission (no phase needs under 0.9 MB, early phas
 per-scene reloads would be frequent. A static choice by plays per byte (`tools/ms3_pcm.py`) keeps
 88 samples in 1 MB and still covers 95.5% of all plays; the rest (rare voices, one-off sounds) are
 aliased to a kept sample in the Z80 sample table. ADPCM-B not measured yet.
+
+## Music: what was learned
+
+- The 68000 sends sound commands through 0x320000; `TRACE` now also logs them ('C' records). In the
+  Mission 1 run 2,461 commands are sent, 59 distinct; the mission BGM starts with command 0x73 at
+  frame 3356 (the following one-off commands are boss/area changes or voices, not yet classified).
+- Recording the BGM without effects: the dev core can mute ADPCM-A (`MS3_MUTE_ADPCMA`), which leaves
+  FM, SSG and ADPCM-B, i.e. a music-only stream of the whole run (20,000 frames = 338 s).
+- Isolating one command by halting the 68000 and sending it from the harness (`HALT68K`, `SENDCMD`)
+  works only partly: the Z80 driver starts its own background loop about 13 s after boot that masks
+  a lone command, and command 1 silences it but then ignores later commands. Next try: read the
+  driver's current-music RAM byte (`retro_dev_sound_ram8`) during the normal run to get the
+  command to track mapping, and cut the music-only stream at those points.
+- Z80 RAM on the Neo Geo CD is 64 KB, so the arcade M1 driver cannot run unchanged; the plan stays:
+  music as CD-DA tracks, commands translated by a small replacement driver.

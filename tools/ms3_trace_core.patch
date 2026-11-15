@@ -71,10 +71,39 @@ index d609f98..6c76f53 100644
  }
  
 diff --git a/src/drivers/neogeo.c b/src/drivers/neogeo.c
-index 640bc85..7573929 100644
+index 640bc85..195117c 100644
 --- a/src/drivers/neogeo.c
 +++ b/src/drivers/neogeo.c
-@@ -8067,10 +8067,60 @@ DRIVER_INIT( kf2k3upl )
+@@ -460,6 +460,20 @@ static READ16_HANDLER( timer16_r )
+ 	return res;
+ }
+ 
++/* dev: sound commands written by the 68000 since the last take */
++static unsigned dev_cmd_log[4096]; static int dev_cmd_count;
++__attribute__((visibility("default"))) int retro_dev_cmd_take(unsigned *buffer, int maximum)
++{
++	int count = dev_cmd_count < 4096 ? dev_cmd_count : 4096, i;
++	for (i = 0; i < count && i < maximum; i++) buffer[i] = dev_cmd_log[i];
++	dev_cmd_count = 0;
++	return count < maximum ? count : maximum;
++}
++
++__attribute__((visibility("default"))) void retro_dev_halt68k(int halt) { cpu_set_halt_line(0, halt ? ASSERT_LINE : CLEAR_LINE); }
++static WRITE16_HANDLER( neo_z80_w );
++__attribute__((visibility("default"))) void retro_dev_sound_command(unsigned command) { neo_z80_w(0, command << 8, 0); }
++
+ static WRITE16_HANDLER( neo_z80_w )
+ {
+ 	/* tpgold uses 16-bit writes, this can't be correct */
+@@ -467,6 +481,7 @@ static WRITE16_HANDLER( neo_z80_w )
+ /*		return;*/
+ 
+ 	soundlatch_w(0,(data>>8)&0xff);
++	if (dev_cmd_count < 4096) dev_cmd_log[dev_cmd_count++] = (data>>8)&0xff;
+ 	pending_command = 1;
+ 	cpu_set_irq_line(1, IRQ_LINE_NMI, PULSE_LINE);
+ 	/* spin for a while to let the Z80 read the command (fixes hanging sound in pspikes2) */
+@@ -8067,10 +8082,60 @@ DRIVER_INIT( kf2k3upl )
  
  static UINT32 cpu1_second_bankaddress;
  
@@ -206,7 +235,7 @@ index 4c07a1a..38bd1eb 100644
  void retro_set_video_refresh(retro_video_refresh_t cb) { video_cb = cb; }
  void retro_set_audio_sample(retro_audio_sample_t cb) { }
 diff --git a/src/sound/fm.c b/src/sound/fm.c
-index 42111e4..b05d510 100644
+index 42111e4..33e25c2 100644
 --- a/src/sound/fm.c
 +++ b/src/sound/fm.c
 @@ -2767,6 +2767,17 @@ static INLINE void ADPCMA_calc_chan( YM2610 *F2610, ADPCM_CH *ch )
@@ -227,11 +256,12 @@ index 42111e4..b05d510 100644
  static void FM_ADPCMAWrite(YM2610 *F2610,int r,int v)
  {
  	ADPCM_CH *adpcm = F2610->adpcm;
-@@ -2790,6 +2801,7 @@ static void FM_ADPCMAWrite(YM2610 *F2610,int r,int v)
+@@ -2790,6 +2801,8 @@ static void FM_ADPCMAWrite(YM2610 *F2610,int r,int v)
  					adpcm[c].adpcm_step= 0;
  					adpcm[c].adpcm_out = 0;
  					adpcm[c].flag      = 1;
 +					if (dev_adpcm_count < 8192) { dev_adpcm_log[dev_adpcm_count][0] = adpcm[c].start; dev_adpcm_log[dev_adpcm_count][1] = adpcm[c].end; dev_adpcm_count++; }
++					if (getenv("MS3_MUTE_ADPCMA")) adpcm[c].flag = 0;
  
  					if(F2610->pcmbuf==NULL){					/* Check ROM Mapped */
  						log_cb(RETRO_LOG_DEBUG, LOGPRE "YM2608-YM2610: ADPCM-A rom not mapped\n");

@@ -16,6 +16,7 @@ def read_trace(path):
     pages [(frame, set of 256-byte pages of the program ROM touched)])"""
     data = open(path, 'rb').read()
     windows, samples, banks, pages, window_pairs, position = [], [], [], [], [], 0
+    read_trace.commands = []
     while position < len(data):
         kind, frame = struct.unpack_from('<II', data, position)
         position += 8
@@ -41,6 +42,10 @@ def read_trace(path):
         elif kind == ord('B'):
             value, = struct.unpack_from('<I', data, position)
             banks.append((frame, value & 0xffffff, value >> 24))
+            position += 4
+        elif kind == ord('C'):
+            value, = struct.unpack_from('<I', data, position)
+            read_trace.commands.append((frame, value))
             position += 4
         else:
             raise SystemExit('bad record %x at %d' % (kind, position))
