@@ -60,18 +60,19 @@ patch the ~270 write sites to go through a lookup table, or renumber the static
 tile references in the data. The first is mechanical and verifiable with the
 frame-by-frame oracle.
 
-## Neo Geo CD boot test bench (work in progress)
+## Neo Geo CD boot test bench
 
-With the user's NGCD BIOS (top-loading `top-sp1.bin`, the universe one is `uni-bioscd33`)
-MAME's `neocd` driver runs headless: `mame neocd -rompath <dir> -cdrom disc.chd -bios top
--video none`, and `-debug -debugscript` with a `trace` command gives a full 68000 trace.
-Findings from the BIOS code (byte-swapped dump, disassembled with m68k objdump):
+Tools: `tools/ngcd_disc.py` builds the disc (ISO 9660 laid out like a real SNK disc, raw
+MODE1/2352 with real EDC/ECC, cue with a CD-DA track). It was checked against a real
+Japanese disc (League Bowling, supplied by the user): the raw sector encoder reproduces its
+sectors bit for bit, and rebuilding its track from its own files gives the identical track
+except the per-file timestamps and the mastering tool's application id.
 
-* the disc check (state 3 of the BIOS state machine at 0xc1dc/0xe8a6) compares the
-  ISO PVD (`CD001`), then reads the files named `CPY.TXT`, `BIB.TXT`, `ABS.TXT` and
-  expects their text to start with `Copyright` / `Bibliographiced` / `Abstracted`,
-  followed by ` by SNK corporation`; the PVD copyright/abstract/bibliographic fields
-  must hold the plain names (`tools/ngcd_mkdisc.py` writes them);
-* with a disc built that way the BIOS still polls the drive status (byte 0x10f7fa
-  stays 0, so the check never starts): the drive is not reported as holding a disc.
-  Not solved yet; a known-good NGCD image is needed to compare the format.
+Facts about the format (from that disc and the BIOS code): names without ";1", files in
+alphabetical order from sector 21, `ABS.TXT`/`BIB.TXT`/`CPY.TXT` with the texts
+"Abstracted/Bibliographiced/Copyright by SNK corporation" + 0x1A, `IPL.TXT` last with lines
+`FILE,0,0\r\n` (bank and offset 0, the extension decides the zone) ending in 0x1A.
+
+MAME 0.264 (`neocd`, bios top/front/unibios33) run headless does not get past the BIOS's
+drive-status poll even with the real disc (state 3 of the BIOS state machine), so it cannot
+be used to validate a boot here. A real console (the user's friend, Japanese) is the test.
