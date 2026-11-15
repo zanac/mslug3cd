@@ -13,6 +13,7 @@
 
    SYSTEM_DIR   directory the core may write to (default: the current one)
    OUT          prefix of the screenshots (default "shot_"): OUT<frame>.ppm
+   OPTIONS      core options, "key=value;key=value"
    SHOTS        frames to save, "950 1700 2400"
    AUDIO        file the sound is saved to: 16-bit stereo, as the core gives it, with
                 no header (the sample rate is printed at the end)
@@ -157,6 +158,18 @@ static bool environment(unsigned command, void *data)
     case RETRO_ENVIRONMENT_GET_VARIABLE: {
         /* core options: only what a test needs, the rest stays at its default */
         struct retro_variable *variable = (struct retro_variable *)data;
+        if (getenv("OPTIONS")) {            /* OPTIONS="key=value;key=value" sets any option */
+            static char options[1024];
+            char *item, *rest = NULL;
+            strncpy(options, getenv("OPTIONS"), sizeof options - 1);
+            for (item = strtok_r(options, ";", &rest); item; item = strtok_r(NULL, ";", &rest)) {
+                char *equals = strchr(item, '=');
+                if (equals && (size_t)(equals - item) == strlen(variable->key) && !strncmp(item, variable->key, equals - item)) {
+                    variable->value = equals + 1;
+                    return true;
+                }
+            }
+        }
         if (strstr(variable->key, "skip_warnings") || strstr(variable->key, "skip_disclaimer")) {
             variable->value = "enabled";
             return true;
@@ -188,6 +201,7 @@ static void save_screenshot(const void *pixels, unsigned width, unsigned height,
         perror(path);
         exit(1);
     }
+    if (getenv("VERBOSE")) fprintf(stderr, "frame %d: format %d, %ux%u pitch %zu\n", current_frame, pixel_format, width, height, pitch);
     fprintf(file, "P6 %u %u 255\n", width, height);
     for (y = 0; y < height; y++) {
         const uint8_t *row = (const uint8_t *)pixels + y * pitch;
@@ -506,7 +520,7 @@ int main(int argc, char **argv)
     read8 = (unsigned (*)(unsigned))dlsym(core, "retro_dev_read8");
     program_counter = (unsigned (*)(void))dlsym(core, "retro_dev_pc");
     sound_read8 = (unsigned (*)(unsigned))dlsym(core, "retro_dev_sound_ram8");
-    if ((!write8 && (poke_count || autowin_from_frame >= 0)) || (!read8 && (dump_count || watch_count))) {
+    if ((!write8 && (poke_count || autowin_from_frame >= 0)) || (!read8 && watch_count)) {
         fprintf(stderr, "POKES, DUMPS and AUTOWIN need a core with mame2003plus-dev-memory.patch\n");
         return 1;
     }
@@ -663,6 +677,22 @@ int main(int argc, char **argv)
         }
         for (index = 0; index < dump_count; index++)
             if (dump_frames[index] == current_frame) {
+                if (!read8) {
+                    /* a stock core: libretro's system RAM and video RAM as OUT<frame>_sysram.bin and _vram.bin */
+                    static const struct { unsigned id; const char *name; } areas[] = { { 2, "sysram" }, { 3, "vram" } };
+                    void *(*get_data)(unsigned) = core_function(core, "retro_get_memory_data");
+                    size_t (*get_size)(unsigned) = core_function(core, "retro_get_memory_size");
+                    int area;
+                    for (area = 0; area < 2; area++) {
+                        char path[1024];
+                        void *memory = get_data(areas[area].id);
+                        size_t size = get_size(areas[area].id);
+                        FILE *file;
+                        snprintf(path, sizeof path, "%s%06d_%s.bin", shot_prefix, current_frame, areas[area].name);
+                        if (memory && size && (file = fopen(path, "wb"))) { fwrite(memory, 1, size, file); fclose(file); }
+                    }
+                    continue;
+                }
                 if (getenv("DUMPRANGE")) {
                     /* DUMPRANGE=start:end (hex): the memory saved at the DUMPS frames, as OUT<frame>_mem.bin */
                     unsigned range_start, range_end;
