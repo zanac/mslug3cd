@@ -1,0 +1,192 @@
+diff --git a/src/cpu/m68000/m68kmame.h b/src/cpu/m68000/m68kmame.h
+index d609f98..6c76f53 100644
+--- a/src/cpu/m68000/m68kmame.h
++++ b/src/cpu/m68000/m68kmame.h
+@@ -51,9 +51,26 @@
+ 
+ extern struct m68k_memory_interface m68k_memory_intf;
+ 
+-#define m68k_read_memory_8(address)          (*m68k_memory_intf.read8)(address)
+-#define m68k_read_memory_16(address)         (*m68k_memory_intf.read16)(address)
+-#define m68k_read_memory_32(address)         (*m68k_memory_intf.read32)(address)
++/* dev (Metal Slug 3 study): the 256-byte pages of the Neo Geo program ROM the 68000 reads or executes */
++extern unsigned char ms3_touch_map[0x9000];
++extern unsigned char ms3_window_seen[4096][0x9000 / 8];   /* [page of the window][physical page] */
++extern unsigned ms3_bank_base;
++static INLINE void ms3_touch(unsigned int address)
++{
++	address &= 0xffffff;
++	if (address < 0x100000)
++		ms3_touch_map[address >> 8] = 1;
++	else if (address - 0x200000 < 0x100000)
++	{
++		unsigned window_page = (address - 0x200000) >> 8, page = (ms3_bank_base + (address - 0x200000)) >> 8;
++		ms3_touch_map[page] = 1;
++		ms3_window_seen[window_page][page >> 3] |= 1 << (page & 7);
++	}
++}
++
++#define m68k_read_memory_8(address)          (ms3_touch(address), (*m68k_memory_intf.read8)(address))
++#define m68k_read_memory_16(address)         (ms3_touch(address), (*m68k_memory_intf.read16)(address))
++#define m68k_read_memory_32(address)         (ms3_touch(address), (*m68k_memory_intf.read32)(address))
+ 
+ #define m68k_read_immediate_16(address)      m68kx_read_immediate_16(address)
+ #define m68k_read_immediate_32(address)      m68kx_read_immediate_32(address)
+@@ -80,6 +97,7 @@ static INLINE void m68k_write_memory_32_pd(unsigned int address, unsigned int va
+ 
+ static INLINE unsigned int m68kx_read_immediate_16(unsigned int address)
+ {
++	ms3_touch(address);
+ 	return cpu_readop16((address) ^ m68k_memory_intf.opcode_xor);
+ }
+ 
+diff --git a/src/drivers/neogeo.c b/src/drivers/neogeo.c
+index 640bc85..b99c4b8 100644
+--- a/src/drivers/neogeo.c
++++ b/src/drivers/neogeo.c
+@@ -8067,10 +8067,46 @@ DRIVER_INIT( kf2k3upl )
+ 
+ static UINT32 cpu1_second_bankaddress;
+ 
++/* dev (Metal Slug 3 study): see m68kmame.h */
++unsigned char ms3_touch_map[0x9000];
++unsigned char ms3_window_seen[4096][0x9000 / 8];
++unsigned ms3_bank_base;
++/* (window page, physical page) pairs seen since the last reset; returns how many */
++__attribute__((visibility("default"))) int retro_dev_window_pairs(unsigned *pairs, int maximum)
++{
++	int count = 0, window_page, page;
++	for (window_page = 0; window_page < 4096; window_page++)
++		for (page = 0; page < 0x9000; page++)
++			if (ms3_window_seen[window_page][page >> 3] & (1 << (page & 7)))
++			{
++				if (count < maximum) { pairs[2 * count] = window_page; pairs[2 * count + 1] = page; }
++				count++;
++			}
++	return count;
++}
++__attribute__((visibility("default"))) void retro_dev_window_reset(void)
++{
++	memset(ms3_window_seen, 0, sizeof ms3_window_seen);
++}
++__attribute__((visibility("default"))) int retro_dev_touch_take(unsigned *pages, int maximum)
++{
++	int count = 0, page;
++	for (page = 0; page < 0x9000; page++)
++		if (ms3_touch_map[page])
++		{
++			ms3_touch_map[page] = 0;
++			if (count < maximum) pages[count] = page;
++			count++;
++		}
++	return count;
++}
++
+ void neogeo_set_cpu1_second_bank(UINT32 bankaddress)
+ {
+ 	data8_t *RAM = memory_region(REGION_CPU1);
+ 
++	ms3_bank_base = bankaddress;
++
+ 	cpu1_second_bankaddress = bankaddress;
+ 	cpu_setbank(4,&RAM[bankaddress]);
+ }
+diff --git a/src/machine/neocrypt.c b/src/machine/neocrypt.c
+index 84eca9f..f78b5ad 100644
+--- a/src/machine/neocrypt.c
++++ b/src/machine/neocrypt.c
+@@ -1855,6 +1855,17 @@ void mslug3_decrypt_68k(void)
+ 	}
+ }
+ 
++/* dev: the bank switches: pc | bank number << 24 */
++static unsigned dev_bank_log[1024];
++static int dev_bank_count;
++__attribute__((visibility("default"))) int retro_dev_banks_take(unsigned *buffer, int maximum)
++{
++	int count = dev_bank_count < 1024 ? dev_bank_count : 1024, i;
++	for (i = 0; i < count && i < maximum; i++) buffer[i] = dev_bank_log[i];
++	dev_bank_count = 0;
++	return count < maximum ? count : maximum;
++}
++
+ static WRITE16_HANDLER( mslug3_bankswitch_w )
+ {
+ 	/* thanks to Razoola and Mr K for the info */
+@@ -1886,6 +1897,7 @@ static WRITE16_HANDLER( mslug3_bankswitch_w )
+ 		(((data>> 9)&1)<<5);
+ 
+ 	bankaddress = 0x100000 + bankoffset[data];
++	dev_bank_log[dev_bank_count++ & 1023] = (cpunum_get_reg(0, REG_PC) & 0xffffff) | ((unsigned)data << 24);
+ 
+ 	neogeo_set_cpu1_second_bank(bankaddress);
+ }
+diff --git a/src/sound/fm.c b/src/sound/fm.c
+index 42111e4..b05d510 100644
+--- a/src/sound/fm.c
++++ b/src/sound/fm.c
+@@ -2767,6 +2767,17 @@ static INLINE void ADPCMA_calc_chan( YM2610 *F2610, ADPCM_CH *ch )
+ }
+ 
+ /* ADPCM type A Write */
++/* dev: ADPCM-A samples started (start, end) since the last retro_dev_adpcm_take() */
++static unsigned dev_adpcm_log[8192][2];
++static int dev_adpcm_count;
++__attribute__((visibility("default"))) int retro_dev_adpcm_take(unsigned *buffer, int maximum)
++{
++	int count = dev_adpcm_count < 8192 ? dev_adpcm_count : 8192, i;
++	for (i = 0; i < count && i < maximum; i++) { buffer[2*i] = dev_adpcm_log[i][0]; buffer[2*i+1] = dev_adpcm_log[i][1]; }
++	dev_adpcm_count = 0;
++	return count < maximum ? count : maximum;
++}
++
+ static void FM_ADPCMAWrite(YM2610 *F2610,int r,int v)
+ {
+ 	ADPCM_CH *adpcm = F2610->adpcm;
+@@ -2790,6 +2801,7 @@ static void FM_ADPCMAWrite(YM2610 *F2610,int r,int v)
+ 					adpcm[c].adpcm_step= 0;
+ 					adpcm[c].adpcm_out = 0;
+ 					adpcm[c].flag      = 1;
++					if (dev_adpcm_count < 8192) { dev_adpcm_log[dev_adpcm_count][0] = adpcm[c].start; dev_adpcm_log[dev_adpcm_count][1] = adpcm[c].end; dev_adpcm_count++; }
+ 
+ 					if(F2610->pcmbuf==NULL){					/* Check ROM Mapped */
+ 						log_cb(RETRO_LOG_DEBUG, LOGPRE "YM2608-YM2610: ADPCM-A rom not mapped\n");
+diff --git a/src/vidhrdw/neogeo_vidhrdw.c b/src/vidhrdw/neogeo_vidhrdw.c
+index c67d90e..f8ee2a7 100644
+--- a/src/vidhrdw/neogeo_vidhrdw.c
++++ b/src/vidhrdw/neogeo_vidhrdw.c
+@@ -66,6 +66,8 @@ static int high_tile;
+ static int vhigh_tile;
+ static int vvhigh_tile;
+ static int no_of_tiles;
++/* dev: the sprite tiles drawn since the last retro_dev_tiles_take() */
++static UINT8 dev_tile_used[0x80000];
+ static INT32 fix_bank;
+ 
+ 
+@@ -705,6 +707,7 @@ static void neogeo_draw_sprite( int my, int sx, int sy, int zx, int zy, int offs
+ 
+ 	if (tileatr & 0x02) yoffs ^= 0x0f;	/* flip y */
+ 
++	dev_tile_used[tileno & 0x7ffff] = 1;
+ 	NeoMVSDrawGfxLine((UINT16 **)line,
+ 			gfx,
+ 			tileno,
+@@ -881,3 +884,17 @@ VIDEO_UPDATE( neogeo )
+ 	}
+ 	neogeo_draw_s_layer(bitmap,cliprect);
+ }
++
++/* dev: list (and forget) the tile numbers drawn since the last call; returns how many */
++__attribute__((visibility("default"))) int retro_dev_tiles_take(unsigned *ids, int maximum)
++{
++	int count = 0, tile;
++	for (tile = 0; tile < 0x80000; tile++)
++		if (dev_tile_used[tile])
++		{
++			dev_tile_used[tile] = 0;
++			if (count < maximum) ids[count] = tile;
++			count++;
++		}
++	return count;
++}
