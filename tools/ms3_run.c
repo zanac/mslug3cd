@@ -207,12 +207,24 @@ static void save_screenshot(const void *pixels, unsigned width, unsigned height,
     fclose(file);
 }
 
+static FILE *frame_hash_file;
+
 static void video_refresh(const void *pixels, unsigned width, unsigned height, size_t pitch)
 {
     int index;
 
     if (!pixels)
         return;
+    if (frame_hash_file) {
+        /* FRAMEHASH=file: one line per video frame, a hash of every pixel (the oracle of the relocation work) */
+        const unsigned char *row_bytes = pixels;
+        unsigned long hash = 1469598103934665603UL;
+        unsigned row, column;
+        for (row = 0; row < height; row++)
+            for (column = 0; column < width * (pixel_format == RETRO_PIXEL_FORMAT_XRGB8888 ? 4 : 2); column++)
+                hash = (hash ^ row_bytes[row * pitch + column]) * 1099511628211UL;
+        fprintf(frame_hash_file, "%d %016lx\n", current_frame, hash);
+    }
     for (index = 0; index < shot_count; index++)
         if (shot_frames[index] == current_frame)
             save_screenshot(pixels, width, height, pitch);
@@ -410,6 +422,7 @@ int main(int argc, char **argv)
         return 1;
     }
     core = dlopen(argv[1], RTLD_NOW);
+    if (core && getenv("VLOG")) { void (*vlog_enable)(int) = dlsym(core, "retro_dev_vlog_enable"); if (vlog_enable) vlog_enable(1); }
     if (!core) {
         fprintf(stderr, "%s\n", dlerror());
         return 1;
@@ -496,6 +509,26 @@ int main(int argc, char **argv)
         return 1;
     }
     ((void (*)(void *))core_function(core, "retro_get_system_av_info"))(&av_info);
+    if (getenv("FRAMEHASH")) frame_hash_file = fopen(getenv("FRAMEHASH"), "w");
+    if (getenv("PATCH")) {
+        /* PATCH=file: records [u32 address][u32 length][bytes], written into the decrypted program */
+        void (*patch)(unsigned, unsigned, const unsigned char *) = dlsym(core, "retro_dev_patch");
+        FILE *patch_file = fopen(getenv("PATCH"), "rb");
+        unsigned header[2];
+        static unsigned char patch_bytes[1 << 20];
+        while (patch && patch_file && fread(header, 8, 1, patch_file) == 1 && header[1] <= sizeof patch_bytes
+               && fread(patch_bytes, 1, header[1], patch_file) == header[1])
+            patch(header[0], header[1], patch_bytes);
+        if (patch_file) fclose(patch_file);
+    }
+    if (getenv("INVERSE")) {
+        /* INVERSE=file: 32768 u32, the original tile number of each renumbered tile */
+        void (*inverse)(const unsigned *) = dlsym(core, "retro_dev_inverse");
+        static unsigned inverse_table[0x8000];
+        FILE *inverse_file = fopen(getenv("INVERSE"), "rb");
+        if (inverse && inverse_file && fread(inverse_table, 4, 0x8000, inverse_file) == 0x8000) inverse(inverse_table);
+        if (inverse_file) fclose(inverse_file);
+    }
     if (getenv("AUDIO")) {
         audio_file = fopen(getenv("AUDIO"), "wb");
         if (!audio_file) {
@@ -617,6 +650,15 @@ int main(int argc, char **argv)
                 if (program_counter)
                     printf("frame %d: pc %06x\n", current_frame, program_counter());
             }
+    }
+    if (getenv("VLOG")) {
+        /* VLOG=file: every SCB1 write of the run (pc, a3, physical source of the word, vram address, data), 16 bytes each */
+        struct vlog_record { unsigned pc, a3, phys; unsigned short addr, data; } *records = NULL;
+        int (*vlog_take)(struct vlog_record **) = dlsym(core, "retro_dev_vlog_take");
+        int count = vlog_take ? vlog_take(&records) : 0;
+        FILE *vlog_file = fopen(getenv("VLOG"), "wb");
+        fwrite(records, sizeof *records, count, vlog_file);
+        fclose(vlog_file);
     }
     if (getenv("VRAM_PCS")) {
         /* VRAM_PCS=file: the 68000 addresses that wrote tile words to the video RAM, with counts */

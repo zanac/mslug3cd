@@ -1,3 +1,33 @@
+diff --git a/src/cpu/m68000/m68kcpu.c b/src/cpu/m68000/m68kcpu.c
+index a23574b..2cd5466 100644
+--- a/src/cpu/m68000/m68kcpu.c
++++ b/src/cpu/m68000/m68kcpu.c
+@@ -641,6 +641,7 @@ void m68k_set_cpu_type(unsigned int cpu_type)
+ 
+ /* Execute some instructions until we use up num_cycles clock cycles */
+ /* ASG: removed per-instruction interrupt checks */
++unsigned char dev_site[0x80000]; unsigned dev_neutral_lo, dev_neutral_hi; int dev_neutral_on; static int dev_cycles_before;
+ int m68k_execute(int num_cycles)
+ {
+ 	/* Make sure we're not stopped */
+@@ -673,9 +674,17 @@ int m68k_execute(int num_cycles)
+ 			REG_PPC = REG_PC;
+ 
+ 			/* Read an instruction and call its handler */
++			dev_cycles_before = GET_CYCLES();
+ 			REG_IR = m68ki_read_imm_16();
+ 			m68ki_instruction_jump_table[REG_IR]();
+ 			USE_CYCLES(CYC_INSTRUCTION[REG_IR]);
++			if (dev_neutral_on)
++			{
++				/* dev: the patched sprite blocks cost what the original block did (48 cycles) */
++				unsigned ppc = REG_PPC & 0xffffff;
++				if (ppc >= dev_neutral_lo && ppc < dev_neutral_hi) SET_CYCLES(dev_cycles_before);
++				else if (ppc < 0x100000 && dev_site[ppc >> 1]) SET_CYCLES(dev_site[ppc >> 1] == 1 ? dev_cycles_before - 48 : dev_cycles_before);
++			}
+ 
+ 			/* Trace m68k_exception, if necessary */
+ 			m68ki_exception_if_trace(); /* auto-disable (see m68kcpu.h) */
 diff --git a/src/cpu/m68000/m68kmame.h b/src/cpu/m68000/m68kmame.h
 index d609f98..6c76f53 100644
 --- a/src/cpu/m68000/m68kmame.h
@@ -41,10 +71,10 @@ index d609f98..6c76f53 100644
  }
  
 diff --git a/src/drivers/neogeo.c b/src/drivers/neogeo.c
-index 640bc85..b99c4b8 100644
+index 640bc85..7573929 100644
 --- a/src/drivers/neogeo.c
 +++ b/src/drivers/neogeo.c
-@@ -8067,10 +8067,46 @@ DRIVER_INIT( kf2k3upl )
+@@ -8067,10 +8067,60 @@ DRIVER_INIT( kf2k3upl )
  
  static UINT32 cpu1_second_bankaddress;
  
@@ -52,6 +82,20 @@ index 640bc85..b99c4b8 100644
 +unsigned char ms3_touch_map[0x9000];
 +unsigned char ms3_window_seen[4096][0x9000 / 8];
 +unsigned ms3_bank_base;
++/* dev: patch the decrypted 68000 program in place (address as the 68000 sees it in the fixed region) */
++__attribute__((visibility("default"))) void retro_dev_patch(unsigned address, unsigned length, const unsigned char *bytes)
++{
++	unsigned i; unsigned char *RAM = memory_region(REGION_CPU1);
++	extern unsigned char dev_site[0x80000]; extern unsigned dev_neutral_lo, dev_neutral_hi; extern int dev_neutral_on;
++	for (i = 0; i < length; i++) RAM[(address + i) ^ 1] = bytes[i];
++	if (length == 10 && bytes[0] == 0x4e && bytes[1] == 0xb9) { dev_site[address >> 1] = 1; dev_site[(address >> 1) + 3] = 2; dev_site[(address >> 1) + 4] = 2; dev_neutral_on = 1; }
++	else if (length > 10 && address >= 0xfa000) { dev_neutral_lo = address; dev_neutral_hi = address + length; }
++}
++/* dev: a byte of the 68000 program region (decrypted), at the physical offset the bank switch uses */
++__attribute__((visibility("default"))) unsigned retro_dev_program_byte(unsigned offset)
++{
++	return offset < memory_region_length(REGION_CPU1) ? memory_region(REGION_CPU1)[offset] : 0;
++}
 +/* (window page, physical page) pairs seen since the last reset; returns how many */
 +__attribute__((visibility("default"))) int retro_dev_window_pairs(unsigned *pairs, int maximum)
 +{
@@ -121,6 +165,46 @@ index 84eca9f..f78b5ad 100644
  
  	neogeo_set_cpu1_second_bank(bankaddress);
  }
+diff --git a/src/mame2003/mame2003.c b/src/mame2003/mame2003.c
+index 4c07a1a..38bd1eb 100644
+--- a/src/mame2003/mame2003.c
++++ b/src/mame2003/mame2003.c
+@@ -695,6 +695,35 @@ void *retro_get_memory_data(unsigned type) {return 0;}
+ size_t retro_get_memory_size(unsigned type) {return 0;}
+ bool retro_load_game_special(unsigned game_type, const struct retro_game_info *info, size_t num_info){return false;}
+ void retro_cheat_reset(void){}
++__attribute__((visibility("default"))) void retro_dev_write8(unsigned address, unsigned value)
++{
++  cpuintrf_push_context(0);
++  cpu_writemem24bew(address, value);
++  cpuintrf_pop_context();
++}
++__attribute__((visibility("default"))) unsigned retro_dev_read8(unsigned address)
++{
++  unsigned value;
++  cpuintrf_push_context(0);
++  value = cpu_readmem24bew(address);
++  cpuintrf_pop_context();
++  return value;
++}
++__attribute__((visibility("default"))) unsigned retro_dev_pc(void)
++{
++  return cpunum_get_reg(0, REG_PC);
++}
++unsigned char *cps_qsound_sharedram1(void);
++unsigned char *cps_qsound_sharedram2(void);
++__attribute__((visibility("default"))) unsigned retro_dev_sound_ram8(unsigned address)
++{
++  /* the QSound Z80's RAM: 0xc000-0xcfff (shared with the 68000) and 0xf000-0xffff */
++  if (address >= 0xc000 && address < 0xd000)
++    return cps_qsound_sharedram1()[address - 0xc000];
++  if (address >= 0xf000)
++    return cps_qsound_sharedram2()[address - 0xf000];
++  return 0;
++}
+ void retro_cheat_set(unsigned unused, bool unused1, const char* unused2){}
+ void retro_set_video_refresh(retro_video_refresh_t cb) { video_cb = cb; }
+ void retro_set_audio_sample(retro_audio_sample_t cb) { }
 diff --git a/src/sound/fm.c b/src/sound/fm.c
 index 42111e4..b05d510 100644
 --- a/src/sound/fm.c
@@ -152,27 +236,85 @@ index 42111e4..b05d510 100644
  					if(F2610->pcmbuf==NULL){					/* Check ROM Mapped */
  						log_cb(RETRO_LOG_DEBUG, LOGPRE "YM2608-YM2610: ADPCM-A rom not mapped\n");
 diff --git a/src/vidhrdw/neogeo_vidhrdw.c b/src/vidhrdw/neogeo_vidhrdw.c
-index c67d90e..f8ee2a7 100644
+index c67d90e..b755999 100644
 --- a/src/vidhrdw/neogeo_vidhrdw.c
 +++ b/src/vidhrdw/neogeo_vidhrdw.c
-@@ -66,6 +66,8 @@ static int high_tile;
+@@ -50,6 +50,8 @@ Notes:
+ ***************************************************************************/
+ 
+ #include "driver.h"
++#include "cpu/m68000/m68000.h"
++#include <stdlib.h>
+ #include "common.h"
+ #include "usrintrf.h"
+ #include "vidhrdw/generic.h"
+@@ -66,6 +68,10 @@ static int high_tile;
  static int vhigh_tile;
  static int vvhigh_tile;
  static int no_of_tiles;
 +/* dev: the sprite tiles drawn since the last retro_dev_tiles_take() */
 +static UINT8 dev_tile_used[0x80000];
++static unsigned dev_inv[0x8000]; static int dev_inv_on;
++__attribute__((visibility("default"))) void retro_dev_inverse(const unsigned *table) { memcpy(dev_inv, table, sizeof dev_inv); dev_inv_on = 1; }
  static INT32 fix_bank;
  
  
-@@ -705,6 +707,7 @@ static void neogeo_draw_sprite( int my, int sx, int sy, int zx, int zy, int offs
+@@ -459,8 +465,45 @@ READ16_HANDLER( neogeo_vidram16_data_r )
+ 	return neogeo_vidram16[neogeo_vidram16_offset];
+ }
+ 
++/* dev: pc of the writes of tile words (SCB1) to the video RAM: pc -> count */
++static unsigned dev_vram_pc[4096];
++static unsigned dev_vram_count[4096];
++static int dev_vram_n;
++__attribute__((visibility("default"))) int retro_dev_vram_pcs(unsigned *out, int maximum)
++{
++	int i, n = dev_vram_n < maximum ? dev_vram_n : maximum;
++	for (i = 0; i < n; i++) { out[2*i] = dev_vram_pc[i]; out[2*i+1] = dev_vram_count[i]; }
++	return n;
++}
++__attribute__((visibility("default"))) void retro_dev_vram_reset(void) { dev_vram_n = 0; }
++
++/* dev: full log of the tile words written to SCB1 (pc, a3, vram address, data) while enabled */
++extern unsigned ms3_bank_base;
++struct dev_vlog { unsigned pc, a3, phys; unsigned short addr, data; };
++static struct dev_vlog *dev_vlog_buf; static int dev_vlog_n, dev_vlog_on, dev_vlog_max = 3000000;
++__attribute__((visibility("default"))) void retro_dev_vlog_enable(int on)
++{
++	if (on && !dev_vlog_buf) dev_vlog_buf = (struct dev_vlog *)malloc(sizeof(struct dev_vlog) * dev_vlog_max);
++	dev_vlog_on = on;
++}
++__attribute__((visibility("default"))) int retro_dev_vlog_take(struct dev_vlog **out) { *out = dev_vlog_buf; return dev_vlog_n; }
++
+ WRITE16_HANDLER( neogeo_vidram16_data_w )
+ {
++	if (dev_vlog_on && neogeo_vidram16_offset < 0x7000 && dev_vlog_n < dev_vlog_max)
++	{
++		struct dev_vlog *r = &dev_vlog_buf[dev_vlog_n++];
++		r->pc = cpunum_get_reg(0, REG_PC) & 0xffffff; r->a3 = cpunum_get_reg(0, M68K_A3);
++		r->addr = neogeo_vidram16_offset; r->data = data;
++		r->phys = (r->a3 >= 0x200002 && r->a3 < 0x300000) ? ms3_bank_base + (r->a3 - 2 - 0x200000) : r->a3 - 2;
++	}
++	if (neogeo_vidram16_offset < 0x7000)
++	{
++		unsigned pc = cpunum_get_reg(0, REG_PC) & 0xffffff, i;
++		for (i = 0; i < (unsigned)dev_vram_n && dev_vram_pc[i] != pc; i++) ;
++		if (i == (unsigned)dev_vram_n && i < 4096) { dev_vram_pc[i] = pc; dev_vram_count[i] = 0; dev_vram_n++; }
++		if (i < 4096) dev_vram_count[i]++;
++	}
+ 	COMBINE_DATA(&neogeo_vidram16[neogeo_vidram16_offset]);
+ 	neogeo_vidram16_offset = (neogeo_vidram16_offset & 0x8000)	/* gururin fix */
+ 			| ((neogeo_vidram16_offset + neogeo_vidram16_modulo) & 0x7fff);
+@@ -705,6 +748,8 @@ static void neogeo_draw_sprite( int my, int sx, int sy, int zx, int zy, int offs
  
  	if (tileatr & 0x02) yoffs ^= 0x0f;	/* flip y */
  
++	if (dev_inv_on) tileno = dev_inv[tileno & 0x7fff];	/* dev: the renumbered tile back to the original one */
 +	dev_tile_used[tileno & 0x7ffff] = 1;
  	NeoMVSDrawGfxLine((UINT16 **)line,
  			gfx,
  			tileno,
-@@ -881,3 +884,17 @@ VIDEO_UPDATE( neogeo )
+@@ -881,3 +926,17 @@ VIDEO_UPDATE( neogeo )
  	}
  	neogeo_draw_s_layer(bitmap,cliprect);
  }

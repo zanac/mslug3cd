@@ -76,3 +76,24 @@ alphabetical order from sector 21, `ABS.TXT`/`BIB.TXT`/`CPY.TXT` with the texts
 MAME 0.264 (`neocd`, bios top/front/unibios33) run headless does not get past the BIOS's
 drive-status poll even with the real disc (state 3 of the BIOS state machine), so it cannot
 be used to validate a boot here. A real console (the user's friend, Japanese) is the test.
+
+## Tile renumbering (NGCD sprite RAM holds 32,768 tiles)
+
+MS3 uses 20-bit tile numbers; the Neo Geo CD sprite memory only holds 32,768 tiles, so the tiles a
+mission uses are packed into runs (`tools/ms3_tilemap.py`, runs keep their number mod 8 because the
+hardware auto-animation replaces the low 2/3 tile bits) and the game's tile writes are redirected
+through a lookup stub (`tools/ms3_patch.py`):
+
+- the 1024 identical unrolled blocks that write a sprite column (tile word, attribute word) become
+  `jsr stub; nop; nop` (same 10 bytes, so the jump tables stay valid);
+- the column copy at 0x17a92 (tile and attribute words read from a stream) becomes `jsr stub2` + nops;
+- Mission 1 needs 403 runs / 27,030 of 32,768 slots; the stub costs about 100-150 cycles per tile.
+
+Oracle: the test core draws with an inverse map and, in dev mode, charges the patched sites the
+cycles of the original code. A 6000-frame scripted run then matches the unpatched reference in 5,978
+frames of 6,001 by hash; the 23 remaining differ only by a banner shown a frame earlier/later
+(timing), not by wrong tiles. Without the 0x17a92 patch only 436 frames matched.
+
+Open: tiles never seen in training render blank (needs coverage from more play-throughs and from
+Mission 2), real cycle cost of the stub on hardware, program relocation (NGCD RAM map still to be
+confirmed from the friend's probe disc).
