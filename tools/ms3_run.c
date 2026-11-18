@@ -14,6 +14,7 @@
    SYSTEM_DIR   directory the core may write to (default: the current one)
    OUT          prefix of the screenshots (default "shot_"): OUT<frame>.ppm
    OPTIONS      core options, "key=value;key=value"
+   SHOTRANGE    first:last, every frame of the range saved like SHOTS
    SHOTS        frames to save, "950 1700 2400"
    AUDIO        file the sound is saved to: 16-bit stereo, as the core gives it, with
                 no header (the sample rate is printed at the end)
@@ -98,7 +99,7 @@ static const struct { const char *name; int joypad_id; } button_names[] = {
 struct press { int frame; unsigned port; int joypad_id; };
 struct poke { int first_frame, last_frame; unsigned address, value; };
 
-#define MAXIMUM_ITEMS 4096
+#define MAXIMUM_ITEMS 16384
 static struct press presses[MAXIMUM_ITEMS];
 static int press_count;
 static struct poke pokes[MAXIMUM_ITEMS];
@@ -244,6 +245,11 @@ static void video_refresh(const void *pixels, unsigned width, unsigned height, s
     for (index = 0; index < shot_count; index++)
         if (shot_frames[index] == current_frame)
             save_screenshot(pixels, width, height, pitch);
+    if (getenv("SHOTRANGE")) {          /* SHOTRANGE=first:last saves every frame of the range */
+        int first, last;
+        if (sscanf(getenv("SHOTRANGE"), "%d:%d", &first, &last) == 2 && current_frame >= first && current_frame <= last)
+            save_screenshot(pixels, width, height, pitch);
+    }
 }
 
 static FILE *audio_file;
@@ -303,10 +309,8 @@ static void mash_buttons(void)
 
 static void parse_press(const char *text)
 {
-    char buffer[4096], *item;
+    char *buffer = strdup(text), *item;
 
-    strncpy(buffer, text, sizeof buffer - 1);
-    buffer[sizeof buffer - 1] = 0;
     for (item = strtok(buffer, ";"); item; item = strtok(NULL, ";")) {
         char text[32];
         const char *name = text;
